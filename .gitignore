@@ -1,0 +1,4 @@
+infra/terraform/.terraform/
+infra/terraform/build/
+infra/terraform/terraform.tfstate*
+*.zip

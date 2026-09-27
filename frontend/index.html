@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI DevOps Console</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+
+<body>
+  <!-- Animated glass orbs -->
+  <div class="ambient-orbs" aria-hidden="true">
+    <span class="orb orb-one"></span>
+    <span class="orb orb-two"></span>
+    <span class="orb orb-three"></span>
+  </div>
+
+  <div class="shell">
+    <nav class="rail">
+      <div class="rail-brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">AI DevOps</span>
+      </div>
+
+      <button class="rail-item active" data-tab="overview">Overview</button>
+      <button class="rail-item" data-tab="generate">Generate</button>
+      <button class="rail-item" data-tab="projects">Projects</button>
+      <button class="rail-item" data-tab="deployments">Deployments</button>
+      <button class="rail-item" data-tab="runs">Pipeline runs</button>
+      <button class="rail-item" data-tab="quality">Quality &amp; Security</button>
+      <button class="rail-item" data-tab="monitoring">Monitoring</button>
+
+      <div class="rail-foot">
+        <span id="apiStatusDot" class="status-dot"></span>
+        <span id="apiStatusText">Checking API…</span>
+      </div>
+    </nav>
+
+    <main class="content">
+      <!-- OVERVIEW -->
+      <section class="tab" id="tab-overview">
+        <header class="tab-head">
+          <h1>Overview</h1>
+          <p>Live status of every generated project moving through the pipeline.</p>
+        </header>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <span class="stat-value" id="statTotal" data-target="0">0</span>
+            <span class="stat-label">Total pipeline runs</span>
+          </div>
+
+          <div class="stat-card accent">
+            <span class="stat-value" id="statRate" data-target="0">0%</span>
+            <span class="stat-label">Success rate</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="statFailed" data-target="0">0</span>
+            <span class="stat-label">Failed runs</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="statProjects" data-target="0">0</span>
+            <span class="stat-label">Projects generated</span>
+          </div>
+        </div>
+
+        <div class="split-row">
+          <div class="panel chart-panel">
+            <div class="panel-head"><h2>Status breakdown</h2></div>
+            <div class="chart-wrap">
+              <canvas id="statusChart"></canvas>
+            </div>
+          </div>
+
+          <div class="panel feed-panel">
+            <div class="panel-head"><h2>Activity</h2></div>
+            <div id="activityFeed" class="activity-feed"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Recent projects</h2></div>
+          <div class="table-wrap">
+            <table id="overviewTable">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Stack</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- GENERATE -->
+      <section class="tab hidden" id="tab-generate">
+        <header class="tab-head">
+          <h1>Generate a project</h1>
+          <p>Describe the app you want. Gemini writes the files; your pipeline takes it from there.</p>
+        </header>
+
+        <div class="panel">
+          <textarea id="promptInput" placeholder="e.g. a Flask REST API for managing students with CRUD operations"></textarea>
+
+          <div class="form-row">
+            <label class="field-label" for="stackSelect">Technology stack</label>
+            <select id="stackSelect" class="text-input">
+              <option value="Python / Flask">Python / Flask</option>
+              <option value="Python / FastAPI">Python / FastAPI</option>
+              <option value="Java / Spring Boot">Java / Spring Boot</option>
+              <option value="JavaScript / Node.js">JavaScript / Node.js</option>
+              <option value="React">React</option>
+              <option value="HTML, CSS and JavaScript">HTML, CSS and JavaScript</option>
+            </select>
+          </div>
+
+          <div class="prompt-chips" aria-label="Prompt examples">
+            <button class="chip" type="button" data-prompt="Create a secure REST API with CRUD operations, input validation, and unit tests.">REST API + tests</button>
+            <button class="chip" type="button" data-prompt="Create a responsive dashboard with login, analytics cards, and a searchable table.">Dashboard</button>
+            <button class="chip" type="button" data-prompt="Create a CRUD web application with authentication, validation, and clear error handling.">CRUD app</button>
+          </div>
+
+          <button id="generateBtn" class="btn-primary">Generate project</button>
+
+          <div id="generateProgress" class="progress-track hidden">
+            <div class="progress-fill"></div>
+          </div>
+
+          <div id="generateResult" class="result-box empty"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Modify an existing project</h2></div>
+
+          <input id="modifyProjectId" class="text-input" placeholder="Project ID, e.g. pending-1790434912">
+
+          <div class="prompt-chips">
+            <button class="chip" type="button" data-modify="Add responsive mobile styling and improve accessibility.">Responsive + accessibility</button>
+            <button class="chip" type="button" data-modify="Add robust input validation and user-friendly error messages.">Validation + errors</button>
+            <button class="chip" type="button" data-modify="Add a dark mode toggle and persist the user's theme preference.">Dark mode</button>
+          </div>
+
+          <textarea id="modifyInstruction" placeholder="Describe the changes you want, e.g. add a dark mode toggle"></textarea>
+          <button id="modifyBtn" class="btn-secondary">Modify</button>
+          <div id="modifyResult" class="result-box empty"></div>
+        </div>
+      </section>
+
+      <!-- PROJECTS -->
+      <section class="tab hidden" id="tab-projects">
+        <header class="tab-head">
+          <h1>Projects</h1>
+          <p>Everything Gemini has generated so far. Select one to open its pipeline detail.</p>
+        </header>
+
+        <div class="panel">
+          <input id="projectSearch" class="text-input" placeholder="Filter by project ID or stack…">
+
+          <div class="table-wrap">
+            <table id="projectsTable">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Stack</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEPLOYMENTS -->
+      <section class="tab hidden" id="tab-deployments">
+        <header class="tab-head">
+          <h1>Deployments</h1>
+          <p>Deployment history for a project, with one-click rollback.</p>
+        </header>
+
+        <div class="panel">
+          <input id="deploymentsProjectId" class="text-input" placeholder="Project ID">
+          <button id="loadDeploymentsBtn" class="btn-secondary">Load</button>
+          <button id="rollbackBtn" class="btn-danger">Rollback to previous</button>
+
+          <div class="table-wrap">
+            <table id="deploymentsTable">
+              <thead>
+                <tr>
+                  <th>Deployment</th>
+                  <th>Status</th>
+                  <th>Revision</th>
+                  <th>Deployed at</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- PIPELINE RUNS -->
+      <section class="tab hidden" id="tab-runs">
+        <header class="tab-head">
+          <h1>Pipeline runs</h1>
+          <p>Security scans, AI reviews, builds, and what went wrong when they didn't pass.</p>
+        </header>
+
+        <div class="panel">
+          <input id="runsProjectId" class="text-input" placeholder="Project ID">
+          <button id="loadRunsBtn" class="btn-secondary">Load</button>
+
+          <div class="table-wrap">
+            <table id="runsTable">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Root cause</th>
+                  <th>Suggested fix</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- QUALITY AND SECURITY -->
+      <section class="tab hidden" id="tab-quality">
+        <header class="tab-head">
+          <h1>Quality &amp; Security</h1>
+          <p>Review quality and security information recorded by your existing pipeline runs.</p>
+        </header>
+
+        <div class="stat-grid quality-stats">
+          <div class="stat-card">
+            <span class="stat-value" id="qualityRunCount">0</span>
+            <span class="stat-label">Runs reviewed</span>
+          </div>
+
+          <div class="stat-card accent">
+            <span class="stat-value" id="qualityFailedCount">0</span>
+            <span class="stat-label">Failed runs</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="qualityAnalyzedCount">0</span>
+            <span class="stat-label">Runs with analysis</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="qualityProjectCount">0</span>
+            <span class="stat-label">Projects available</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Inspect a project's pipeline findings</h2></div>
+
+          <div class="form-inline">
+            <input id="qualityProjectId" class="text-input" placeholder="Project ID">
+            <button id="loadQualityBtn" class="btn-primary">Load findings</button>
+          </div>
+
+          <p class="hint">This view reads saved pipeline run records. It does not launch a new security scan.</p>
+
+          <div class="table-wrap">
+            <table id="qualityTable">
+              <thead>
+                <tr>
+                  <th>Run</th>
+                  <th>Status</th>
+                  <th>Root cause</th>
+                  <th>Suggested fix</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="4" class="hint">Enter a project ID and load its runs.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- MONITORING -->
+      <section class="tab hidden" id="tab-monitoring">
+        <header class="tab-head">
+          <h1>Monitoring</h1>
+          <p>Live metrics and recent pipeline status from your API.</p>
+        </header>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <span class="stat-value" id="monitorTotal">—</span>
+            <span class="stat-label">Total runs</span>
+          </div>
+
+          <div class="stat-card accent">
+            <span class="stat-value" id="monitorSuccess">—</span>
+            <span class="stat-label">Successful</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="monitorFailed">—</span>
+            <span class="stat-label">Failed</span>
+          </div>
+
+          <div class="stat-card">
+            <span class="stat-value" id="monitorRate">—</span>
+            <span class="stat-label">Success rate</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head panel-head-row">
+            <h2>Recent project activity</h2>
+            <button id="refreshMonitoringBtn" class="btn-secondary">Refresh now</button>
+          </div>
+
+          <div id="monitoringFeed" class="activity-feed">
+            <p class="hint">Loading activity…</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Operational note</h2></div>
+          <p class="hint">Metrics reflect data returned by your configured API. Application-level CPU, memory, latency, and live log streaming require monitoring instrumentation in the deployed service.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- PROJECT DRAWER -->
+  <div id="drawerOverlay" class="drawer-overlay hidden"></div>
+
+  <aside id="projectDrawer" class="drawer">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">Project</h2>
+      <button id="drawerClose" class="drawer-close">✕</button>
+    </div>
+
+    <div class="stepper" id="drawerStepper"></div>
+
+    <dl class="detail-grid">
+      <dt>Stack</dt>
+      <dd id="drawerStack">–</dd>
+
+      <dt>Description</dt>
+      <dd id="drawerDescription">–</dd>
+
+      <dt>Files</dt>
+      <dd id="drawerFiles">–</dd>
+    </dl>
+
+    <div class="drawer-section">
+      <span class="drawer-label">Pull the code</span>
+      <code class="code-line" id="drawerDownloadCmd">–</code>
+    </div>
+
+    <div class="drawer-section">
+      <span class="drawer-label">Run the pipeline</span>
+      <p class="hint">Browser pages can't safely trigger GitHub Actions directly (that means exposing a token client-side). Run this instead:</p>
+      <code class="code-line" id="drawerPipelineCmd">–</code>
+    </div>
+  </aside>
+
+  <div id="toastRoot" class="toast-root"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
