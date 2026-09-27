@@ -1,3 +1,120 @@
+# name: AI-DevOps-Pipeline
+
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       project_id:
+#         description: "Project ID to build and deploy (from a prior generate/modify call)"
+#         required: true
+
+# env:
+#   AWS_REGION: us-east-1
+#   PROJECT_PREFIX: ai-devops
+#   MAX_FIX_ATTEMPTS: 3
+
+# jobs:
+#   pipeline:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ env.AWS_REGION }}
+
+#       - name: Pull generated project files from S3
+#         run: |
+#           aws s3 sync s3://${{ env.PROJECT_PREFIX }}-generated-code-$(aws sts get-caller-identity --query Account --output text)/${{ github.event.inputs.project_id }} ./project
+
+#       - name: Security scan
+#         id: security
+#         run: |
+#           RESULT=$(aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-security-scan \
+#             --cli-binary-format raw-in-base64-out \
+#             --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" response.json && cat response.json)
+#           VERDICT=$(jq -r '.body' response.json | jq -r '.verdict')
+#           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+#           echo "$RESULT"
+
+#       - name: Fail if security scan rejects
+#         if: steps.security.outputs.verdict == 'FAIL'
+#         run: exit 1
+
+#       - name: AI code review
+#         id: review
+#         run: |
+#           aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-code-review \
+#             --cli-binary-format raw-in-base64-out \
+#             --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" response.json
+#           VERDICT=$(jq -r '.body' response.json | jq -r '.verdict')
+#           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+#           cat response.json
+
+#       - name: Fail if code review rejects
+#         if: steps.review.outputs.verdict == 'REJECT'
+#         run: exit 1
+
+#       - name: Run tests
+#         id: tests
+#         continue-on-error: true
+#         run: |
+#           cd project
+#           pip install -r requirements.txt --quiet || true
+#           pip install pytest --quiet
+#           pytest -q 2>&1 | tee ../test_output.log
+
+#       - name: Build and push Docker image
+#         id: build
+#         continue-on-error: true
+#         run: |
+#           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+#           ECR_URI="$ACCOUNT_ID.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.PROJECT_PREFIX }}-generated-apps"
+#           aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin "$ECR_URI"
+#           cd project
+#           docker build -t "$ECR_URI:${{ github.event.inputs.project_id }}" . 2>&1 | tee ../build_output.log
+#           docker push "$ECR_URI:${{ github.event.inputs.project_id }}"
+#           echo "image_uri=$ECR_URI:${{ github.event.inputs.project_id }}" >> "$GITHUB_OUTPUT"
+
+#       - name: AI auto-fix on failure (up to MAX_FIX_ATTEMPTS)
+#         if: steps.tests.outcome == 'failure' || steps.build.outcome == 'failure'
+#         run: |
+#           LOG=$(cat test_output.log build_output.log 2>/dev/null | tail -c 8000)
+#           for ATTEMPT in $(seq 1 ${{ env.MAX_FIX_ATTEMPTS }}); do
+#             echo "Auto-fix attempt $ATTEMPT"
+#             aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-failure-analyzer \
+#               --cli-binary-format raw-in-base64-out \
+#               --payload "$(jq -n --arg log "$LOG" --arg pid "${{ github.event.inputs.project_id }}" '{project_id:$pid, logs:$log}')" \
+#               analysis.json
+#             cat analysis.json
+
+#             aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-auto-fix \
+#               --cli-binary-format raw-in-base64-out \
+#               --payload "$(jq -n --arg log "$LOG" --arg pid "${{ github.event.inputs.project_id }}" --argjson a "$ATTEMPT" '{project_id:$pid, error_log:$log, attempt:$a}')" \
+#               fix.json
+#             cat fix.json
+#           done
+#           echo "::error::Build/tests still failing after ${{ env.MAX_FIX_ATTEMPTS }} auto-fix attempts. Re-run the pipeline to retry with the fixed code."
+#           exit 1
+
+#       - name: Deploy to ECS Fargate
+#         if: steps.build.outcome == 'success'
+#         id: deploy
+#         run: |
+#           aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-deploy \
+#             --cli-binary-format raw-in-base64-out \
+#             --payload "$(jq -n --arg pid "${{ github.event.inputs.project_id }}" --arg img "${{ steps.build.outputs.image_uri }}" '{project_id:$pid, image_uri:$img}')" \
+#             deploy_response.json
+#           cat deploy_response.json
+
+#       - name: Rollback on failed deploy
+#         if: failure() && steps.deploy.outcome == 'failure'
+#         run: |
+#           aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-rollback \
+#             --cli-binary-format raw-in-base64-out \
+#             --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" rollback_response.json
+#           cat rollback_response.json
+
 name: AI-DevOps-Pipeline
 
 on:
@@ -23,6 +140,10 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Set run ID
+        id: run_id
+        run: echo "run_id=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Pull generated project files from S3
         run: |
           aws s3 sync s3://${{ env.PROJECT_PREFIX }}-generated-code-$(aws sts get-caller-identity --query Account --output text)/${{ github.event.inputs.project_id }} ./project
@@ -30,12 +151,23 @@ jobs:
       - name: Security scan
         id: security
         run: |
-          RESULT=$(aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-security-scan \
+          aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-security-scan \
             --cli-binary-format raw-in-base64-out \
-            --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" response.json && cat response.json)
+            --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" response.json
           VERDICT=$(jq -r '.body' response.json | jq -r '.verdict')
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
-          echo "$RESULT"
+          cat response.json
+
+      - name: Record run if security scan rejects
+        if: steps.security.outputs.verdict == 'FAIL'
+        run: |
+          aws dynamodb put-item --table-name ${{ env.PROJECT_PREFIX }}-pipeline-runs --item '{
+            "project_id": {"S": "${{ github.event.inputs.project_id }}"},
+            "run_id": {"S": "${{ steps.run_id.outputs.run_id }}"},
+            "status": {"S": "failed"},
+            "stage": {"S": "security_scan"},
+            "created_at": {"N": "'$(date +%s)'"}
+          }'
 
       - name: Fail if security scan rejects
         if: steps.security.outputs.verdict == 'FAIL'
@@ -50,6 +182,17 @@ jobs:
           VERDICT=$(jq -r '.body' response.json | jq -r '.verdict')
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           cat response.json
+
+      - name: Record run if code review rejects
+        if: steps.review.outputs.verdict == 'REJECT'
+        run: |
+          aws dynamodb put-item --table-name ${{ env.PROJECT_PREFIX }}-pipeline-runs --item '{
+            "project_id": {"S": "${{ github.event.inputs.project_id }}"},
+            "run_id": {"S": "${{ steps.run_id.outputs.run_id }}"},
+            "status": {"S": "failed"},
+            "stage": {"S": "code_review"},
+            "created_at": {"N": "'$(date +%s)'"}
+          }'
 
       - name: Fail if code review rejects
         if: steps.review.outputs.verdict == 'REJECT'
@@ -84,7 +227,7 @@ jobs:
             echo "Auto-fix attempt $ATTEMPT"
             aws lambda invoke --function-name ${{ env.PROJECT_PREFIX }}-failure-analyzer \
               --cli-binary-format raw-in-base64-out \
-              --payload "$(jq -n --arg log "$LOG" --arg pid "${{ github.event.inputs.project_id }}" '{project_id:$pid, logs:$log}')" \
+              --payload "$(jq -n --arg log "$LOG" --arg pid "${{ github.event.inputs.project_id }}" --arg rid "${{ steps.run_id.outputs.run_id }}" '{project_id:$pid, run_id:$rid, logs:$log}')" \
               analysis.json
             cat analysis.json
 
@@ -94,6 +237,15 @@ jobs:
               fix.json
             cat fix.json
           done
+
+          aws dynamodb put-item --table-name ${{ env.PROJECT_PREFIX }}-pipeline-runs --item '{
+            "project_id": {"S": "${{ github.event.inputs.project_id }}"},
+            "run_id": {"S": "${{ steps.run_id.outputs.run_id }}"},
+            "status": {"S": "failed"},
+            "stage": {"S": "build_or_test"},
+            "created_at": {"N": "'$(date +%s)'"}
+          }'
+
           echo "::error::Build/tests still failing after ${{ env.MAX_FIX_ATTEMPTS }} auto-fix attempts. Re-run the pipeline to retry with the fixed code."
           exit 1
 
@@ -107,6 +259,17 @@ jobs:
             deploy_response.json
           cat deploy_response.json
 
+      - name: Record successful run
+        if: steps.deploy.outcome == 'success'
+        run: |
+          aws dynamodb put-item --table-name ${{ env.PROJECT_PREFIX }}-pipeline-runs --item '{
+            "project_id": {"S": "${{ github.event.inputs.project_id }}"},
+            "run_id": {"S": "${{ steps.run_id.outputs.run_id }}"},
+            "status": {"S": "success"},
+            "stage": {"S": "deployed"},
+            "created_at": {"N": "'$(date +%s)'"}
+          }'
+
       - name: Rollback on failed deploy
         if: failure() && steps.deploy.outcome == 'failure'
         run: |
@@ -114,3 +277,11 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             --payload "{\"project_id\":\"${{ github.event.inputs.project_id }}\"}" rollback_response.json
           cat rollback_response.json
+
+          aws dynamodb put-item --table-name ${{ env.PROJECT_PREFIX }}-pipeline-runs --item '{
+            "project_id": {"S": "${{ github.event.inputs.project_id }}"},
+            "run_id": {"S": "${{ steps.run_id.outputs.run_id }}"},
+            "status": {"S": "failed"},
+            "stage": {"S": "deploy_rolled_back"},
+            "created_at": {"N": "'$(date +%s)'"}
+          }'
